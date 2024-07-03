@@ -53,7 +53,7 @@ topk: [5, 10, 20]
 
 # directory setting
 log_root: "./log/"
-data_path: "./dataset/"
+data_path: "./datasets/"
 #checkpoint_dir:
 
 lmd: 0.1
