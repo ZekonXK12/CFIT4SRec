@@ -66,7 +66,7 @@ class Config(object):
             config_file_list (list of str): the external config file, it allows multiple config files, default is None.
             config_dict (dict): the external parameter dictionaries, default is None.
         """
-        model = model[1:-1]
+        # model = model[1:-1]
         #dataset = dataset[1:-1]
         self._init_parameters_category()
         self.yaml_loader = self._build_yaml_loader()
