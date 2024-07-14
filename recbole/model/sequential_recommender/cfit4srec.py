@@ -147,8 +147,7 @@ class CFIT4SRec(SequentialRecommender):
         position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
         position_embedding = self.position_embedding(position_ids)
 
-        output_aug_l1, output_aug_l2, output_aug_h1, output_aug_h2, output_aug_b1, output_aug_b2 = [None for i in
-                                                                                                    range(6)]
+        output_aug_l1, output_aug_l2, output_aug_h1, output_aug_h2, output_aug_b1, output_aug_b2 = [None for i in range(6)]
 
         item_emb = self.item_embedding(item_seq)
         input_emb = item_emb + position_embedding
@@ -196,12 +195,13 @@ class CFIT4SRec(SequentialRecommender):
                                                 output_all_encoded_layers=True)
             output_aug_b2 = input_emb_aug_b2[-1]
 
-        input_emb = self.dropout(input_emb)
 
+        input_emb = self.dropout(input_emb)
         trm_output = self.trm_encoder(input_emb, extended_attention_mask, output_all_encoded_layers=True)
         output = trm_output[-1]
 
         return output, output_aug_l1, output_aug_l2, output_aug_h1, output_aug_h2, output_aug_b1, output_aug_b2
+
 
     def my_fft(self, seq):
         f = torch.fft.rfft(seq, dim=1)
@@ -209,10 +209,20 @@ class CFIT4SRec(SequentialRecommender):
         phase = torch.angle(f)
         return amp, phase
 
+    # def fft_2(self, x, filter):
+    #     f = torch.fft.fft2(x)
+    #     fshift = torch.fft.fftshift(f)
+    #     return torch.abs(torch.fft.ifft2(torch.fft.ifftshift(fshift.cuda() * filter.cuda())))
+
     def fft_2(self, x, filter):
         f = torch.fft.fft2(x)
         fshift = torch.fft.fftshift(f)
-        return torch.abs(torch.fft.ifft2(torch.fft.ifftshift(fshift.cuda() * filter.cuda())))
+        f_filtered = fshift.cuda() * filter.cuda()
+        f_ishift = torch.fft.ifftshift(f_filtered)
+        x_ifft = torch.fft.ifft2(f_ishift)
+        real_x=x_ifft.real
+        abs_x=torch.abs(x_ifft)
+        return real_x  # 返回实部
 
     def createBSAilter(self, shape, bandCenter, bandWidth):
         rows, cols = shape
@@ -292,10 +302,10 @@ class CFIT4SRec(SequentialRecommender):
         else:  # self.loss_type = 'CE'
 
             test_item_emb = self.item_embedding.weight[:self.n_items]  # unpad the augmentation mask
-            logits = torch.matmul(seq_output, test_item_emb.transpose(0, 1))
+            logits = torch.matmul(seq_output, test_item_emb.transpose(0, 1))    # 计算相似度 查询表示和键表示进行矩阵乘法
             loss = self.loss_fct(logits, pos_items)
 
-        # Constive loss
+        # Contrastive loss
         nce_loss_l, nce_loss_h, nce_loss_b = [0, 0, 0]
         if self.l_ok:
             nce_loss_l = self.ncelosss(self.tau, 'cuda', seq_output_aug_l1, seq_output_aug_l2)

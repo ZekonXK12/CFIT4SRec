@@ -168,9 +168,22 @@ def dict2str(result_dict):
         str: result str
     """
 
-    result_str = ''
-    for metric, value in result_dict.items():
-        result_str += str(metric) + ' : ' + str(value) + '    '
+    # result_str = ''
+    # for metric, value in result_dict.items():
+    #     result_str += str(metric) + ' : ' + str(value) + '    '
+    # return result_str
+
+    result_dict = {k: round(v.real, 3) for k, v in result_dict.items()}
+
+    hit5="{:.3f}".format(result_dict['hit@5'])
+    hit10="{:.3f}".format(result_dict['hit@10'])
+    hit20="{:.3f}".format(result_dict['hit@20'])
+    ndcg5="{:.3f}".format(result_dict['ndcg@5'])
+    ndcg10="{:.3f}".format(result_dict['ndcg@10'])
+    ndcg20="{:.3f}".format(result_dict['ndcg@20'])
+    str_hit=f"hit@5: {hit5}  | hit@10: {hit10}  | hit@20: {hit20}"
+    str_ndcg=f"ndcg@5: {ndcg5} | ndcg@10: {ndcg10} | ndcg@20: {ndcg20}"
+    result_str=str_hit+'\n'+str_ndcg
     return result_str
 
 

@@ -92,6 +92,7 @@ class ProxyEvaluator(object):
         for i, evaluator in enumerate(self.evaluators):
             res = evaluator.evaluate(matrix_dict[i], eval_data)
             result_dict.update(res)
+        result_dict = {k: round(v.real, 3) for k, v in result_dict.items()}
         return result_dict
 
     def _check_args(self):
