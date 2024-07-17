@@ -10,6 +10,8 @@ from recbole.model.loss import BPRLoss
 import torch.fft as fft
 import torch.nn.functional as F
 
+from kun.model.XLSTM import xLSTM
+
 
 class WaveRec(SequentialRecommender):
 
@@ -36,7 +38,7 @@ class WaveRec(SequentialRecommender):
         self.initializer_range = 0.02
         self.loss_type = 'CE'
 
-        self.shuffle_aug=True
+        self.shuffle_aug=False
         self.lmd = config['lmd']
 
         # define layers and loss
@@ -52,6 +54,13 @@ class WaveRec(SequentialRecommender):
             hidden_act=self.hidden_act,
             layer_norm_eps=self.layer_norm_eps
         )
+
+        self.lstm_encoder = xLSTM(
+            input_size=self.hidden_size,
+            hidden_size=self.hidden_size,
+            num_layers=self.n_layers
+        )
+
 
 
         self.LayerNorm = nn.LayerNorm(self.hidden_size, eps=self.layer_norm_eps)
@@ -92,56 +101,58 @@ class WaveRec(SequentialRecommender):
         extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
         return extended_attention_mask
 
-    # def forward(self, item_seq, item_seq_len):
-    #     extended_attention_mask = self.get_attention_mask(item_seq)
-    #     position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
-    #     position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
-    #     position_embedding = self.position_embedding(position_ids)
-    #     shuffled_item_seq=self.shuffle_seq(item_seq,item_seq_len, 0.5)
-    #
-    #
-    #     item_emb = self.item_embedding(item_seq)
-    #
-    #     input_emb = item_emb + position_embedding
-    #     input_emb = self.LayerNorm(input_emb)
-    #
-    #
-    #     input_emb = self.dropout(input_emb)
-    #
-    #     input_emb= input_emb
-    #     trm_output = self.trm_encoder(input_emb, extended_attention_mask, output_all_encoded_layers=True)
-    #     output = trm_output[-1]
-    #
-    #
-    #     return output
-
     def forward(self, item_seq, item_seq_len):
         extended_attention_mask = self.get_attention_mask(item_seq)
         position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
         position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
         position_embedding = self.position_embedding(position_ids)
+        shuffled_item_seq=self.shuffle_seq(item_seq,item_seq_len, 0.5)
+
 
         item_emb = self.item_embedding(item_seq)
+
         input_emb = item_emb + position_embedding
-
-
-
         input_emb = self.LayerNorm(input_emb)
+
+
         input_emb = self.dropout(input_emb)
 
-        trm_output = self.trm_encoder(input_emb, extended_attention_mask, output_all_encoded_layers=True)
-        output = trm_output[-1]
+        # trm_output = self.trm_encoder(input_emb, extended_attention_mask, output_all_encoded_layers=True)
+        # output = trm_output[-1]
 
-        if self.shuffle_aug:
-            shuffled_item_seq = self.shuffle_seq(item_seq, item_seq_len, 0.5)
-            shuffled_item_seq = self.item_embedding(shuffled_item_seq)
-            shuffled_item_seq = shuffled_item_seq + position_embedding
-            shuffled_item_seq = self.LayerNorm(shuffled_item_seq)
-            shuffled_item_seq = self.dropout(shuffled_item_seq)
-        trm_output_shuffled = self.trm_encoder(shuffled_item_seq,extended_attention_mask,output_all_encoded_layers=True)
-        shuffled_aug_output=trm_output_shuffled[-1]
+        lstm_output, _ = self.lstm_encoder(input_emb)
+        output = lstm_output[:, -1, :]  # 取最后一个时间步的输出
 
-        return output,shuffled_aug_output
+        return output
+
+
+    # def forward(self, item_seq, item_seq_len):
+    #     extended_attention_mask = self.get_attention_mask(item_seq)
+    #     position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
+    #     position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
+    #     position_embedding = self.position_embedding(position_ids)
+    #
+    #     item_emb = self.item_embedding(item_seq)
+    #     input_emb = item_emb + position_embedding
+    #
+    #
+    #
+    #     input_emb = self.LayerNorm(input_emb)
+    #     input_emb = self.dropout(input_emb)
+    #
+    #     trm_output = self.trm_encoder(input_emb, extended_attention_mask, output_all_encoded_layers=True)
+    #     output = trm_output[-1]
+    #
+    #     if self.shuffle_aug:
+    #         shuffled_item_seq = self.shuffle_seq(item_seq, item_seq_len, 0.5)
+    #         shuffled_item_seq = self.item_embedding(shuffled_item_seq)
+    #         shuffled_item_seq = shuffled_item_seq + position_embedding
+    #         shuffled_item_seq = self.LayerNorm(shuffled_item_seq)
+    #         shuffled_item_seq = self.dropout(shuffled_item_seq)
+    #     trm_output_shuffled = self.trm_encoder(shuffled_item_seq,extended_attention_mask,output_all_encoded_layers=True)
+    #     shuffled_aug_output=trm_output_shuffled[-1]
+    #
+    #     return output,shuffled_aug_output
 
     def calculate_loss(self, interaction):
         item_seq = interaction[self.ITEM_SEQ]
@@ -158,8 +169,9 @@ class WaveRec(SequentialRecommender):
 
         if self.shuffle_aug:
             shuffle_aug_loss=self.ncelosss(self.tau, 'cuda', seq_output,shuffled_aug_output)
+            return loss+self.lmd*shuffle_aug_loss
 
-        return loss+self.lmd*shuffle_aug_loss
+        return loss
 
     def ncelosss(self, temperature, device, batch_sample_one, batch_sample_two):
         self.device = device

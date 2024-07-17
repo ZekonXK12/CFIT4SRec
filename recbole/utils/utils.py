@@ -181,7 +181,7 @@ def dict2str(result_dict):
     ndcg5="{:.3f}".format(result_dict['ndcg@5'])
     ndcg10="{:.3f}".format(result_dict['ndcg@10'])
     ndcg20="{:.3f}".format(result_dict['ndcg@20'])
-    str_hit=f"hit@5: {hit5}  | hit@10: {hit10}  | hit@20: {hit20}"
+    str_hit=f"hit@5:  {hit5} | hit@10:  {hit10} | hit@20:  {hit20}"
     str_ndcg=f"ndcg@5: {ndcg5} | ndcg@10: {ndcg10} | ndcg@20: {ndcg20}"
     result_str=str_hit+'\n'+str_ndcg
     return result_str

@@ -28,6 +28,7 @@ from recbole.model.loss import BPRLoss
 import torch.fft as fft
 import torch.nn.functional as F
 
+from kun.model.XLSTM import xLSTM
 
 class CFIT4SRec(SequentialRecommender):
     r"""
