@@ -39,6 +39,9 @@ class WaveRec(SequentialRecommender):
         self.wavelet_aug = True
         self.lmd = config['lmd']
 
+        self.mh_attn = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=self.n_heads,
+                                                    dropout=self.attn_dropout_prob)
+
         # define layers and loss
         self.item_embedding = nn.Embedding(self.n_items + 1, self.hidden_size, padding_idx=0)
         self.position_embedding = nn.Embedding(self.max_seq_length, self.hidden_size)
@@ -60,7 +63,7 @@ class WaveRec(SequentialRecommender):
         self.nce_fct = nn.CrossEntropyLoss()
 
         # Initialize DWT and IDWT
-        self.dwt = DWTForward(J=1, wave='db4', mode='zero').cuda()  # Single level DWT
+        self.dwt = DWTForward(J=2, wave='db4', mode='zero').cuda()  # Single level DWT
         self.idwt = DWTInverse(wave='db4', mode='zero').cuda()
 
         # parameters initialization
@@ -107,17 +110,34 @@ class WaveRec(SequentialRecommender):
 
         low_freq_component, high_freq_component = self.wavelet_transform(input_emb)
 
-        # low_freq_component = torch.tensor(data=low_freq_component, dtype=torch.float32).to('cuda')
-        # high_freq_component = torch.tensor(data=high_freq_component, dtype=torch.float32).to('cuda')
-
         low_output = self.trm_encoder(low_freq_component, extended_attention_mask, output_all_encoded_layers=False)[0]
         high_output = self.trm_encoder(high_freq_component, extended_attention_mask, output_all_encoded_layers=False)[0]
-
 
         base_output = self.trm_encoder(base_emb, extended_attention_mask, output_all_encoded_layers=False)[0]
 
         # output = base_output + self.lmd * low_output + self.lmd * high_output
-        output = base_output + 0.3 * low_output + 0.1 * high_output
+        # output = base_output + 0.3 * low_output + 0.3 * high_output
+
+
+
+
+
+
+
+        low_freq_component, high_freq_component = self.wavelet_transform(input_emb)
+        combined_input = (input_emb + low_freq_component + high_freq_component) / 3
+        combined_input = combined_input.permute(1, 0, 2)  # (L, N, E)
+        fused_output, _ = self.mh_attn(combined_input, combined_input, combined_input)
+        fused_output = fused_output.permute(1, 0, 2)  # (N, L, E)
+        output = self.trm_encoder(fused_output, extended_attention_mask, output_all_encoded_layers=False)[0]
+
+
+
+
+
+
+
+
 
         return output
 
