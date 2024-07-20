@@ -36,13 +36,13 @@ min_item_inter_num: 5
 #    timestamp: 1577714400
 
 # training settings
-epochs: 50 #训练的最大轮数
-train_batch_size: 256 #训练的batch_size
+epochs: 40 #训练的最大轮数
+train_batch_size: 128 #训练的batch_size
 learner: adam #使用的pytorch内置优化器
 learning_rate: 0.001 #学习率
 training_neg_sample_num: 0 #负采样数目
 eval_step: 1 #每次训练后做evalaution的次数
-stopping_step: 10 #控制训练收敛的步骤数，在该步骤数内若选取的评测标准没有什么变化，就可以提前停止了
+stopping_step: 40 #控制训练收敛的步骤数，在该步骤数内若选取的评测标准没有什么变化，就可以提前停止了
 # evalution settings
 eval_setting: TO_LS,full #对数据按时间排序，设置留一法划分数据集，并使用全排序
 metrics: ["NDCG","Hit"] #评测标准
@@ -57,7 +57,7 @@ data_path: "./datasets/"
 #checkpoint_dir:
 
 lmd: 0.3
-lmd_sem: 0.1
+#lmd_sem: 0.1
 
 tau: 1
 
@@ -80,9 +80,9 @@ noise_r : 0
 
 same_length : 10
 
-l_ok: False
-h_ok: False
+l_ok: True
+h_ok: True
 b_ok: False
 
-low_r: False
-high_r: False
+low_r: True
+high_r: True

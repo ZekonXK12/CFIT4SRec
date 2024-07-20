@@ -1,16 +1,13 @@
 import random
 
 import numpy as np
+import pywt
 import torch
 from torch import nn
+from pytorch_wavelets import DWTForward, DWTInverse
 
 from recbole.model.abstract_recommender import SequentialRecommender
 from recbole.model.layers import TransformerEncoder
-from recbole.model.loss import BPRLoss
-import torch.fft as fft
-import torch.nn.functional as F
-
-from kun.model.XLSTM import xLSTM
 
 
 class WaveRec(SequentialRecommender):
@@ -22,7 +19,7 @@ class WaveRec(SequentialRecommender):
         self.n_layers = 2
         self.n_heads = 2
         self.hidden_size = 64  # same as embedding_size
-        self.inner_size = 258 # the dimensionality in feed-forward layer
+        self.inner_size = 258  # the dimensionality in feed-forward layer
         self.hidden_dropout_prob = 0.5
         self.attn_dropout_prob = 0.5
         self.hidden_act = 'gelu'
@@ -38,7 +35,8 @@ class WaveRec(SequentialRecommender):
         self.initializer_range = 0.02
         self.loss_type = 'CE'
 
-        self.shuffle_aug=False
+        self.shuffle_aug = True
+        self.wavelet_aug = True
         self.lmd = config['lmd']
 
         # define layers and loss
@@ -55,20 +53,15 @@ class WaveRec(SequentialRecommender):
             layer_norm_eps=self.layer_norm_eps
         )
 
-        self.lstm_encoder = xLSTM(
-            input_size=self.hidden_size,
-            hidden_size=self.hidden_size,
-            num_layers=self.n_layers
-        )
-
-
-
         self.LayerNorm = nn.LayerNorm(self.hidden_size, eps=self.layer_norm_eps)
         self.dropout = nn.Dropout(self.hidden_dropout_prob)
         self.loss_fct = nn.CrossEntropyLoss()
 
-
         self.nce_fct = nn.CrossEntropyLoss()
+
+        # Initialize DWT and IDWT
+        self.dwt = DWTForward(J=1, wave='db4', mode='zero').cuda()  # Single level DWT
+        self.idwt = DWTInverse(wave='db4', mode='zero').cuda()
 
         # parameters initialization
         self.apply(self._init_weights)
@@ -106,72 +99,73 @@ class WaveRec(SequentialRecommender):
         position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
         position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
         position_embedding = self.position_embedding(position_ids)
-        shuffled_item_seq=self.shuffle_seq(item_seq,item_seq_len, 0.5)
-
 
         item_emb = self.item_embedding(item_seq)
-
         input_emb = item_emb + position_embedding
-        input_emb = self.LayerNorm(input_emb)
+        base_emb = self.LayerNorm(input_emb)
+        base_emb = self.dropout(base_emb)
+
+        low_freq_component, high_freq_component = self.wavelet_transform(input_emb)
+
+        # low_freq_component = torch.tensor(data=low_freq_component, dtype=torch.float32).to('cuda')
+        # high_freq_component = torch.tensor(data=high_freq_component, dtype=torch.float32).to('cuda')
+
+        low_output = self.trm_encoder(low_freq_component, extended_attention_mask, output_all_encoded_layers=False)[0]
+        high_output = self.trm_encoder(high_freq_component, extended_attention_mask, output_all_encoded_layers=False)[0]
 
 
-        input_emb = self.dropout(input_emb)
+        base_output = self.trm_encoder(base_emb, extended_attention_mask, output_all_encoded_layers=False)[0]
 
-        # trm_output = self.trm_encoder(input_emb, extended_attention_mask, output_all_encoded_layers=True)
-        # output = trm_output[-1]
-
-        lstm_output, _ = self.lstm_encoder(input_emb)
-        output = lstm_output[:, -1, :]  # 取最后一个时间步的输出
+        # output = base_output + self.lmd * low_output + self.lmd * high_output
+        output = base_output + 0.3 * low_output + 0.1 * high_output
 
         return output
-
-
-    # def forward(self, item_seq, item_seq_len):
-    #     extended_attention_mask = self.get_attention_mask(item_seq)
-    #     position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
-    #     position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
-    #     position_embedding = self.position_embedding(position_ids)
-    #
-    #     item_emb = self.item_embedding(item_seq)
-    #     input_emb = item_emb + position_embedding
-    #
-    #
-    #
-    #     input_emb = self.LayerNorm(input_emb)
-    #     input_emb = self.dropout(input_emb)
-    #
-    #     trm_output = self.trm_encoder(input_emb, extended_attention_mask, output_all_encoded_layers=True)
-    #     output = trm_output[-1]
-    #
-    #     if self.shuffle_aug:
-    #         shuffled_item_seq = self.shuffle_seq(item_seq, item_seq_len, 0.5)
-    #         shuffled_item_seq = self.item_embedding(shuffled_item_seq)
-    #         shuffled_item_seq = shuffled_item_seq + position_embedding
-    #         shuffled_item_seq = self.LayerNorm(shuffled_item_seq)
-    #         shuffled_item_seq = self.dropout(shuffled_item_seq)
-    #     trm_output_shuffled = self.trm_encoder(shuffled_item_seq,extended_attention_mask,output_all_encoded_layers=True)
-    #     shuffled_aug_output=trm_output_shuffled[-1]
-    #
-    #     return output,shuffled_aug_output
 
     def calculate_loss(self, interaction):
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
-        seq_output, shuffled_aug_output = self.forward(item_seq, item_seq_len)
+        seq_output = self.forward(item_seq, item_seq_len)
         seq_output = self.gather_indexes(seq_output, item_seq_len - 1)
-        shuffled_aug_output=self.gather_indexes(shuffled_aug_output,item_seq_len-1)
+
         pos_items = interaction[self.POS_ITEM_ID]
 
-
         test_item_emb = self.item_embedding.weight[:self.n_items]  # unpad the augmentation mask
-        logits = torch.matmul(seq_output, test_item_emb.transpose(0, 1))    # 计算相似度 查询表示和键表示进行矩阵乘法
+        logits = torch.matmul(seq_output, test_item_emb.transpose(0, 1))  # 计算相似度 查询表示和键表示进行矩阵乘法
         loss = self.loss_fct(logits, pos_items)
 
-        if self.shuffle_aug:
-            shuffle_aug_loss=self.ncelosss(self.tau, 'cuda', seq_output,shuffled_aug_output)
-            return loss+self.lmd*shuffle_aug_loss
-
         return loss
+
+    # def wavelet_transform(self, input_emb, wavelet='db4', level=2):
+    #     input_emb = input_emb.detach().cpu().numpy()
+    #     coeffs = pywt.wavedec(input_emb, wavelet, level=level)
+    #     approx_coeffs = coeffs[0]
+    #     detail_coeffs = coeffs[1:]
+    #
+    #     low_freq_component = pywt.waverec([approx_coeffs] + [np.zeros_like(c) for c in detail_coeffs], wavelet)
+    #     high_freq_component = input_emb - low_freq_component
+    #
+    #     return low_freq_component, high_freq_component
+
+    def wavelet_transform(self, input_emb):
+        # Ensure the input tensor has the correct shape (N, C, H, W)
+        if input_emb.dim() != 4:
+            input_emb = input_emb.unsqueeze(1)  # Add channel dimension: (N, 1, H, W)
+
+        # Perform DWT
+        Yl, Yh = self.dwt(input_emb)
+
+        # Only perform inverse DWT on Yl
+        Yh_zeros = [torch.zeros_like(Yh_level) for Yh_level in Yh]  # Create zeroed high-frequency components
+        low_freq_component = self.idwt((Yl, Yh_zeros))
+
+        # Calculate high frequency component as residual
+        high_freq_component = input_emb - low_freq_component
+
+        # Ensure the output has the same shape as input_emb
+        low_freq_component = low_freq_component.squeeze(1)  # Remove channel dimension if needed
+        high_freq_component = high_freq_component.squeeze(1)  # Remove channel dimension if needed
+
+        return low_freq_component, high_freq_component
 
     def ncelosss(self, temperature, device, batch_sample_one, batch_sample_two):
         self.device = device
@@ -199,7 +193,7 @@ class WaveRec(SequentialRecommender):
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
         test_item = interaction[self.ITEM_ID]
-        seq_output= self.forward(item_seq, item_seq_len)
+        seq_output = self.forward(item_seq, item_seq_len)
         seq_output = self.gather_indexes(seq_output, item_seq_len - 1)
         test_item_emb = self.item_embedding(test_item)
         scores = torch.mul(seq_output, test_item_emb).sum(dim=1)  # [B]
@@ -208,21 +202,8 @@ class WaveRec(SequentialRecommender):
     def full_sort_predict(self, interaction):
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
-        seq_output= self.forward(item_seq, item_seq_len)
+        seq_output = self.forward(item_seq, item_seq_len)
         seq_output = self.gather_indexes(seq_output, item_seq_len - 1)
         test_items_emb = self.item_embedding.weight[:self.n_items]  # unpad the augmentation mask
         scores = torch.matmul(seq_output, test_items_emb.transpose(0, 1))  # [B n_items]
         return scores
-
-    # contrastive learning methods
-    def shuffle_seq(self, batch_data, seq_len, shuffle_prob=0.5):
-        batch_data=batch_data.clone()
-
-        for i in range(self.batch_size):
-            user_len=int(seq_len[i])
-            indices=random.sample(range(user_len),int(user_len*shuffle_prob))
-            indices_shuffled=indices.copy()
-            random.shuffle(indices_shuffled)
-            batch_data[i,indices]=batch_data[i,indices_shuffled]
-
-        return batch_data
