@@ -1,7 +1,3 @@
-import random
-
-import numpy as np
-import pywt
 import torch
 from torch import nn
 from pytorch_wavelets import DWTForward, DWTInverse
@@ -39,8 +35,6 @@ class WaveRec(SequentialRecommender):
         self.wavelet_aug = True
         self.lmd = config['lmd']
 
-        self.activation = nn.LeakyReLU()
-
         # define layers and loss
         self.item_embedding = nn.Embedding(self.n_items + 1, self.hidden_size, padding_idx=0)
         self.position_embedding = nn.Embedding(self.max_seq_length, self.hidden_size)
@@ -62,12 +56,28 @@ class WaveRec(SequentialRecommender):
         self.nce_fct = nn.CrossEntropyLoss()
 
         # Initialize DWT and IDWT
-        self.dwt = DWTForward(J=2, wave='db4', mode='zero').cuda()  # Single level DWT
+        self.dwt = DWTForward(J=3, wave='db4', mode='zero').cuda()  # Single level DWT
         self.idwt = DWTInverse(wave='db4', mode='zero').cuda()
 
-        self.conv = nn.Conv2d(in_channels=3, out_channels=1, kernel_size=1)
-        self.mh_attn = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=self.n_heads)
+        # self.conv = nn.Conv2d(in_channels=3, out_channels=1, kernel_size=1)
+        #
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=32, out_channels=1, kernel_size=1),
+        )
 
+        self.mlp = nn.Sequential(
+            nn.Linear(self.hidden_size, self.hidden_size * 2),
+            nn.ReLU(),
+            nn.Linear(self.hidden_size * 2, self.hidden_size),
+        )
+
+        self.activation = nn.LeakyReLU(negative_slope=0.2)
         # parameters initialization
         self.apply(self._init_weights)
 
@@ -100,7 +110,7 @@ class WaveRec(SequentialRecommender):
         return extended_attention_mask
 
     def forward(self, item_seq, item_seq_len):
-        extended_attention_mask = self.get_attention_mask(item_seq)  # Shape: (N, 1, 1, L)
+        extended_attention_mask = self.get_attention_mask(item_seq)
         position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
         position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
         position_embedding = self.position_embedding(position_ids)
@@ -120,23 +130,17 @@ class WaveRec(SequentialRecommender):
         reshaped = reshaped.view(-1, 3, 8, 8)  # Shape: (256 * 50, 3, 8, 8)
 
         # 通过卷积层进行特征融合
-        fused_input = self.conv(reshaped)  # Shape: (256 * 50, 1, 8, 8)
+        fused = self.conv(reshaped)  # Shape: (256 * 50, 1, 8, 8)
 
         # 恢复形状
-        fused_input = fused_input.view(-1, 50, 8, 8, 1).permute(0, 1, 4, 2, 3).squeeze(2)  # Shape: (256, 50, 8, 8)
-        fused_input = fused_input.view(-1, 50, 64)
-        fused_input = self.activation(fused_input)
+        fused = fused.view(-1, 50, 8, 8, 1).permute(0, 1, 4, 2, 3).squeeze(2)  # Shape: (256, 50, 8, 8)
+        fused = fused.view(-1,50,64)
+        # fused = self.activation(fused)
 
-        # 调整形状以匹配多头注意力机制的输入要求
-        fused_input = fused_input.permute(1, 0, 2).contiguous()  # Shape: (50, 256, 64)
 
-        fused_output, _ = self.mh_attn(fused_input, fused_input, fused_input)
-        fused_output = self.dropout(fused_output)
+        fused = self.LayerNorm(fused)
 
-        # 恢复形状以匹配Transformer编码器的输入要求
-        fused_output = fused_output.permute(1, 0, 2).contiguous()  # Shape: (256, 50, 64)
-
-        output = self.trm_encoder(fused_output, extended_attention_mask, output_all_encoded_layers=False)[0]
+        output = self.trm_encoder(fused, extended_attention_mask, output_all_encoded_layers=False)[0]
 
         return output
 
@@ -153,17 +157,6 @@ class WaveRec(SequentialRecommender):
         loss = self.loss_fct(logits, pos_items)
 
         return loss
-
-    # def wavelet_transform(self, input_emb, wavelet='db4', level=2):
-    #     input_emb = input_emb.detach().cpu().numpy()
-    #     coeffs = pywt.wavedec(input_emb, wavelet, level=level)
-    #     approx_coeffs = coeffs[0]
-    #     detail_coeffs = coeffs[1:]
-    #
-    #     low_freq_component = pywt.waverec([approx_coeffs] + [np.zeros_like(c) for c in detail_coeffs], wavelet)
-    #     high_freq_component = input_emb - low_freq_component
-    #
-    #     return low_freq_component, high_freq_component
 
     def wavelet_transform(self, input_emb):
         # Ensure the input tensor has the correct shape (N, C, H, W)
@@ -185,28 +178,6 @@ class WaveRec(SequentialRecommender):
         high_freq_component = high_freq_component.squeeze(1)  # Remove channel dimension if needed
 
         return low_freq_component, high_freq_component
-
-    def ncelosss(self, temperature, device, batch_sample_one, batch_sample_two):
-        self.device = device
-        self.criterion = nn.CrossEntropyLoss().to(self.device)
-        self.temperature = temperature
-        b_size = batch_sample_one.shape[0]
-        batch_sample_one = batch_sample_one.view(b_size, -1)
-        batch_sample_two = batch_sample_two.view(b_size, -1)
-
-        self.cossim = nn.CosineSimilarity(dim=-1).to(self.device)
-        sim11 = torch.matmul(batch_sample_one, batch_sample_one.T) / self.temperature
-        sim22 = torch.matmul(batch_sample_two, batch_sample_two.T) / self.temperature
-        sim12 = torch.matmul(batch_sample_one, batch_sample_two.T) / self.temperature
-        d = sim12.shape[-1]
-        sim11[..., range(d), range(d)] = float('-inf')
-        sim22[..., range(d), range(d)] = float('-inf')
-        raw_scores1 = torch.cat([sim12, sim11], dim=-1)
-        raw_scores2 = torch.cat([sim22, sim12.transpose(-1, -2)], dim=-1)
-        logits = torch.cat([raw_scores1, raw_scores2], dim=-2)
-        labels = torch.arange(2 * d, dtype=torch.long, device=logits.device)
-        nce_loss = self.criterion(logits, labels)
-        return nce_loss
 
     def predict(self, interaction):
         item_seq = interaction[self.ITEM_SEQ]

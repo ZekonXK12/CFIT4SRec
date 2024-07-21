@@ -185,7 +185,7 @@ def dict2str(result_dict):
     for key, value in result_dict.items():
         summary_score+=value
     summary_score=str(round(summary_score/6,3))
-    str_hit=f"hit@5:  {hit5} | hit@10:  {hit10} | hit@20:  {hit20}"
+    str_hit=f"hit@5: {hit5}  | hit@10: {hit10}  | hit@20: {hit20}"
     str_ndcg=f"ndcg@5: {ndcg5} | ndcg@10: {ndcg10} | ndcg@20: {ndcg20}"
     result_str=str_hit+'\n'+str_ndcg+'\nsummary score ---------- '+summary_score
     return result_str
