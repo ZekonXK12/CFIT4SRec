@@ -38,7 +38,7 @@ class WaveRec(SequentialRecommender):
         self.shuffle_aug = True
         self.wavelet_aug = True
         self.lmd = config['lmd']
-
+        self.linear_comb = nn.Linear(3 * self.hidden_size, self.hidden_size)
         self.mh_attn = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=self.n_heads,
                                                     dropout=self.attn_dropout_prob)
 
@@ -65,6 +65,8 @@ class WaveRec(SequentialRecommender):
         # Initialize DWT and IDWT
         self.dwt = DWTForward(J=2, wave='db4', mode='zero').cuda()  # Single level DWT
         self.idwt = DWTInverse(wave='db4', mode='zero').cuda()
+
+        self.conv = nn.Conv2d(in_channels=3, out_channels=1, kernel_size=1)
 
         # parameters initialization
         self.apply(self._init_weights)
@@ -105,39 +107,35 @@ class WaveRec(SequentialRecommender):
 
         item_emb = self.item_embedding(item_seq)
         input_emb = item_emb + position_embedding
-        base_emb = self.LayerNorm(input_emb)
-        base_emb = self.dropout(base_emb)
+        input_emb = self.LayerNorm(input_emb)
+        input_emb = self.dropout(input_emb)
 
         low_freq_component, high_freq_component = self.wavelet_transform(input_emb)
 
-        low_output = self.trm_encoder(low_freq_component, extended_attention_mask, output_all_encoded_layers=False)[0]
-        high_output = self.trm_encoder(high_freq_component, extended_attention_mask, output_all_encoded_layers=False)[0]
+        stacked = torch.stack([input_emb, low_freq_component, high_freq_component], dim=2)
+        reshaped = stacked.view(-1, 50, 3, 8, 8)
 
-        base_output = self.trm_encoder(base_emb, extended_attention_mask, output_all_encoded_layers=False)[0]
+        # 调整输入形状以适应卷积层
+        reshaped = reshaped.permute(0, 1, 3, 4, 2).contiguous()  # Shape: (256, 50, 8, 8, 3)
+        reshaped = reshaped.view(-1, 3, 8, 8)  # Shape: (256 * 50, 3, 8, 8)
 
-        # output = base_output + self.lmd * low_output + self.lmd * high_output
-        # output = base_output + 0.3 * low_output + 0.3 * high_output
+        # 通过卷积层进行特征融合
+        fused = self.conv(reshaped)  # Shape: (256 * 50, 1, 8, 8)
 
+        # 恢复形状
+        fused = fused.view(-1, 50, 8, 8, 1).permute(0, 1, 4, 2, 3).squeeze(2)  # Shape: (256, 50, 8, 8)
+        fused = fused.view(-1,50,64)
+        #
+        # # Dynamic weight fusion
+        # combined_input = torch.cat([input_emb, low_freq_component, high_freq_component], dim=2)
+        # combined_input = self.linear_comb(combined_input)
+        #
+        # # Permute for multi-head attention
+        # combined_input = combined_input.permute(1, 0, 2)  # (L, N, E)
+        # fused_output, _ = self.mh_attn(combined_input, combined_input, combined_input)
+        # fused_output = fused_output.permute(1, 0, 2)  # (N, L, E)
 
-
-
-
-
-
-        low_freq_component, high_freq_component = self.wavelet_transform(input_emb)
-        combined_input = (input_emb + low_freq_component + high_freq_component) / 3
-        combined_input = combined_input.permute(1, 0, 2)  # (L, N, E)
-        fused_output, _ = self.mh_attn(combined_input, combined_input, combined_input)
-        fused_output = fused_output.permute(1, 0, 2)  # (N, L, E)
-        output = self.trm_encoder(fused_output, extended_attention_mask, output_all_encoded_layers=False)[0]
-
-
-
-
-
-
-
-
+        output = self.trm_encoder(fused, extended_attention_mask, output_all_encoded_layers=False)[0]
 
         return output
 
