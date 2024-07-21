@@ -12,8 +12,7 @@ from logging import getLogger
 from recbole.config import Config
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, get_trainer, init_seed
-from recbole.utils.utils import set_color
-
+from recbole.utils.utils import set_color,dict2str
 
 def run_recbole(model=None, dataset=None, config_file_list=None, config_dict=None, saved=True):
     r""" A fast running api, which includes the complete process of
@@ -129,8 +128,8 @@ def run_recbole(model=None, dataset=None, config_file_list=None, config_dict=Non
     # model evaluation
     test_result = trainer.evaluate(test_data, load_best_model=saved, show_progress=config['show_progress'])
 
-    logger.info(set_color('best valid ', 'yellow') + f': {best_valid_result}')
-    logger.info(set_color('test result', 'yellow') + f': {test_result}')
+    logger.info(set_color('best valid:\n', 'yellow') + f'{dict2str(best_valid_result)}')
+    logger.info(set_color('test result:\n', 'yellow') + f'{dict2str(test_result)}')
     import os
     if os.path.exists('result/{}'.format(config['model'])):
         pass

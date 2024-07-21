@@ -16,12 +16,12 @@ class WaveRec(SequentialRecommender):
         super(WaveRec, self).__init__(config, dataset)
 
         # load parameters info
-        self.n_layers = 2
-        self.n_heads = 2
+        self.n_layers = 4
+        self.n_heads = 4
         self.hidden_size = 64  # same as embedding_size
         self.inner_size = 258  # the dimensionality in feed-forward layer
-        self.hidden_dropout_prob = 0.5
-        self.attn_dropout_prob = 0.5
+        self.hidden_dropout_prob = config['hidden_dropout_prob']
+        self.attn_dropout_prob = config['attn_dropout_prob']
         self.hidden_act = 'gelu'
         self.layer_norm_eps = 1e-12
 
@@ -38,9 +38,8 @@ class WaveRec(SequentialRecommender):
         self.shuffle_aug = True
         self.wavelet_aug = True
         self.lmd = config['lmd']
-        self.linear_comb = nn.Linear(3 * self.hidden_size, self.hidden_size)
-        self.mh_attn = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=self.n_heads,
-                                                    dropout=self.attn_dropout_prob)
+
+        self.activation = nn.LeakyReLU()
 
         # define layers and loss
         self.item_embedding = nn.Embedding(self.n_items + 1, self.hidden_size, padding_idx=0)
@@ -67,6 +66,7 @@ class WaveRec(SequentialRecommender):
         self.idwt = DWTInverse(wave='db4', mode='zero').cuda()
 
         self.conv = nn.Conv2d(in_channels=3, out_channels=1, kernel_size=1)
+        self.mh_attn = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=self.n_heads)
 
         # parameters initialization
         self.apply(self._init_weights)
@@ -100,7 +100,7 @@ class WaveRec(SequentialRecommender):
         return extended_attention_mask
 
     def forward(self, item_seq, item_seq_len):
-        extended_attention_mask = self.get_attention_mask(item_seq)
+        extended_attention_mask = self.get_attention_mask(item_seq)  # Shape: (N, 1, 1, L)
         position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
         position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
         position_embedding = self.position_embedding(position_ids)
@@ -120,22 +120,23 @@ class WaveRec(SequentialRecommender):
         reshaped = reshaped.view(-1, 3, 8, 8)  # Shape: (256 * 50, 3, 8, 8)
 
         # 通过卷积层进行特征融合
-        fused = self.conv(reshaped)  # Shape: (256 * 50, 1, 8, 8)
+        fused_input = self.conv(reshaped)  # Shape: (256 * 50, 1, 8, 8)
 
         # 恢复形状
-        fused = fused.view(-1, 50, 8, 8, 1).permute(0, 1, 4, 2, 3).squeeze(2)  # Shape: (256, 50, 8, 8)
-        fused = fused.view(-1,50,64)
-        #
-        # # Dynamic weight fusion
-        # combined_input = torch.cat([input_emb, low_freq_component, high_freq_component], dim=2)
-        # combined_input = self.linear_comb(combined_input)
-        #
-        # # Permute for multi-head attention
-        # combined_input = combined_input.permute(1, 0, 2)  # (L, N, E)
-        # fused_output, _ = self.mh_attn(combined_input, combined_input, combined_input)
-        # fused_output = fused_output.permute(1, 0, 2)  # (N, L, E)
+        fused_input = fused_input.view(-1, 50, 8, 8, 1).permute(0, 1, 4, 2, 3).squeeze(2)  # Shape: (256, 50, 8, 8)
+        fused_input = fused_input.view(-1, 50, 64)
+        fused_input = self.activation(fused_input)
 
-        output = self.trm_encoder(fused, extended_attention_mask, output_all_encoded_layers=False)[0]
+        # 调整形状以匹配多头注意力机制的输入要求
+        fused_input = fused_input.permute(1, 0, 2).contiguous()  # Shape: (50, 256, 64)
+
+        fused_output, _ = self.mh_attn(fused_input, fused_input, fused_input)
+        fused_output = self.dropout(fused_output)
+
+        # 恢复形状以匹配Transformer编码器的输入要求
+        fused_output = fused_output.permute(1, 0, 2).contiguous()  # Shape: (256, 50, 64)
+
+        output = self.trm_encoder(fused_output, extended_attention_mask, output_all_encoded_layers=False)[0]
 
         return output
 
