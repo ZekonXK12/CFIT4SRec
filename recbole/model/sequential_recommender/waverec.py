@@ -59,17 +59,17 @@ class WaveRec(SequentialRecommender):
         self.dwt = DWTForward(J=3, wave='db4', mode='zero').cuda()  # Single level DWT
         self.idwt = DWTInverse(wave='db4', mode='zero').cuda()
 
-        # self.conv = nn.Conv2d(in_channels=3, out_channels=1, kernel_size=1)
-        #
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=32, out_channels=1, kernel_size=1),
-        )
+        self.conv = nn.Conv2d(in_channels=3, out_channels=1, kernel_size=1)
+
+        # self.conv = nn.Sequential(
+        #     nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, padding=1),
+        #     nn.BatchNorm2d(16),
+        #     nn.ReLU(),
+        #     nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1),
+        #     nn.BatchNorm2d(32),
+        #     nn.ReLU(),
+        #     nn.Conv2d(in_channels=32, out_channels=1, kernel_size=1),
+        # )
 
         self.mlp = nn.Sequential(
             nn.Linear(self.hidden_size, self.hidden_size * 2),
@@ -112,8 +112,7 @@ class WaveRec(SequentialRecommender):
     def forward(self, item_seq, item_seq_len):
         extended_attention_mask = self.get_attention_mask(item_seq)
 
-        item_emb = self.item_embedding(item_seq)
-        input_emb = item_emb
+        input_emb = self.item_embedding(item_seq)
         input_emb = self.LayerNorm(input_emb)
         input_emb = self.dropout(input_emb)
 
