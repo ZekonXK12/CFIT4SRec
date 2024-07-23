@@ -111,12 +111,9 @@ class WaveRec(SequentialRecommender):
 
     def forward(self, item_seq, item_seq_len):
         extended_attention_mask = self.get_attention_mask(item_seq)
-        position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
-        position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
-        position_embedding = self.position_embedding(position_ids)
 
         item_emb = self.item_embedding(item_seq)
-        input_emb = item_emb + position_embedding
+        input_emb = item_emb
         input_emb = self.LayerNorm(input_emb)
         input_emb = self.dropout(input_emb)
 
@@ -135,10 +132,9 @@ class WaveRec(SequentialRecommender):
         # 恢复形状
         fused = fused.view(-1, 50, 8, 8, 1).permute(0, 1, 4, 2, 3).squeeze(2)  # Shape: (256, 50, 8, 8)
         fused = fused.view(-1,50,64)
-        # fused = self.activation(fused)
-
 
         fused = self.LayerNorm(fused)
+        fused = self.dropout(fused)
 
         output = self.trm_encoder(fused, extended_attention_mask, output_all_encoded_layers=False)[0]
 

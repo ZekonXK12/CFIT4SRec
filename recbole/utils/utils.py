@@ -175,19 +175,37 @@ def dict2str(result_dict):
 
     result_dict = {k: round(v.real, 3) for k, v in result_dict.items()}
 
-    hit5="{:.3f}".format(result_dict['hit@5'])
-    hit10="{:.3f}".format(result_dict['hit@10'])
-    hit20="{:.3f}".format(result_dict['hit@20'])
-    ndcg5="{:.3f}".format(result_dict['ndcg@5'])
-    ndcg10="{:.3f}".format(result_dict['ndcg@10'])
-    ndcg20="{:.3f}".format(result_dict['ndcg@20'])
-    summary_score=0.0
-    for key, value in result_dict.items():
-        summary_score+=value
-    summary_score=str(round(summary_score/6,3))
-    str_hit=f"hit@5: {hit5}  | hit@10: {hit10}  | hit@20: {hit20}"
-    str_ndcg=f"ndcg@5: {ndcg5} | ndcg@10: {ndcg10} | ndcg@20: {ndcg20}"
-    result_str=str_hit+'\n'+str_ndcg+'\nsummary score ---------- '+summary_score
+    # hit5="{:.3f}".format(result_dict['hit@5'])
+    # hit10="{:.3f}".format(result_dict['hit@10'])
+    # hit20="{:.3f}".format(result_dict['hit@20'])
+    # ndcg5="{:.3f}".format(result_dict['ndcg@5'])
+    # ndcg10="{:.3f}".format(result_dict['ndcg@10'])
+    # ndcg20="{:.3f}".format(result_dict['ndcg@20'])
+    # summary_score=0.0
+    # for key, value in result_dict.items():
+    #     summary_score+=value
+    # summary_score=str(round(summary_score/6,3))
+    # str_hit=f"hit@5: {hit5}  | hit@10: {hit10}  | hit@20: {hit20}"
+    # str_ndcg=f"ndcg@5: {ndcg5} | ndcg@10: {ndcg10} | ndcg@20: {ndcg20}"
+    # result_str=str_hit+'\n'+str_ndcg+'\nsummary score ---------- '+summary_score
+    # return result_str
+
+    result_str= ''
+    summary_score=0
+    n=0
+    for k, v in result_dict.items():
+        if n%2==0:
+            result_str=result_str+f'{k} : {"{:.3f}".format(v)}  |  '
+        n+=1
+    result_str=result_str+'\n'
+    n=0
+    for k, v in result_dict.items():
+        if n%2!=0:
+            result_str=result_str+f'{k}: {"{:.3f}".format(v)}  |  '
+        n+=1
+        summary_score+=v**2
+    summary_score=np.sqrt(summary_score/10)
+    result_str=result_str+'\nsummary score -------------------------------- {:.3f}'.format(summary_score)
     return result_str
 
 

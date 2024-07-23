@@ -45,11 +45,11 @@ eval_step: 1 #每次训练后做evalaution的次数
 stopping_step: 40 #控制训练收敛的步骤数，在该步骤数内若选取的评测标准没有什么变化，就可以提前停止了
 # evalution settings
 eval_setting: TO_LS,full #对数据按时间排序，设置留一法划分数据集，并使用全排序
-metrics: ["NDCG","Hit"] #评测标准
+metrics: ["Recall","MRR","NDCG","Hit","precision"] #评测标准
 valid_metric: Hit@10 #选取哪个评测标准作为作为提前停止训练的标准
 eval_batch_size: 256 #评测的batch_size
 weight_decay: 0
-topk: [5, 10, 20]
+topk: [5, 10]
 
 # directory setting
 log_root: "./log/"
