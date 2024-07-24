@@ -37,20 +37,22 @@ min_item_inter_num: 5
 
 # training settings
 epochs: 40 #训练的最大轮数
+stopping_step: 40 #控制训练收敛的步骤数，在该步骤数内若选取的评测标准没有什么变化，就可以提前停止了
+
 train_batch_size: 256 #训练的batch_size
 learner: adam #使用的pytorch内置优化器
 learning_rate: 0.001 #学习率
 training_neg_sample_num: 0 #负采样数目
 eval_step: 1 #每次训练后做evalaution的次数
-stopping_step: 40 #控制训练收敛的步骤数，在该步骤数内若选取的评测标准没有什么变化，就可以提前停止了
 # evalution settings
 eval_setting: TO_LS,full #对数据按时间排序，设置留一法划分数据集，并使用全排序
 metrics: ["Recall","MRR","NDCG","Hit","precision"] #评测标准
-valid_metric: Hit@10 #选取哪个评测标准作为作为提前停止训练的标准
+valid_metric: NDCG@10 #选取哪个评测标准作为作为提前停止训练的标准
 eval_batch_size: 256 #评测的batch_size
 weight_decay: 0
 topk: [5, 10]
 
+#split_ratio: [0.6,0.2,0.2]
 # directory setting
 log_root: "./log/"
 data_path: "./datasets/"
