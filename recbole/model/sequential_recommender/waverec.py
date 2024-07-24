@@ -127,7 +127,7 @@ class WaveRec(SequentialRecommender):
         fused = fused.view(-1,50,64)
 
         fused = self.LayerNorm(fused)
-        fused = self.dropout(fused)
+        # fused = self.dropout(fused)
 
         output = self.trm_encoder(fused, extended_attention_mask, output_all_encoded_layers=False)[0]
 
