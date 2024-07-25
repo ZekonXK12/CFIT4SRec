@@ -7,7 +7,7 @@ from recbole.utils import init_seed
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', '-m', type=str, default='WaveRec', help='name of models')
+    parser.add_argument('--model', '-m', type=str, default='WaveRec2', help='name of models')
     # parser.add_argument('--model', '-m', type=str, default='SASRec', help='name of models')
     # parser.add_argument('--model', '-m', type=str, default='CFIT4SRec', help='name of models')
     parser.add_argument('--dataset', '-d', type=str, default='ml-1m', help='name of datasets')
