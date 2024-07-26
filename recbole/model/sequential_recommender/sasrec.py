@@ -15,8 +15,8 @@ class SASRec(SequentialRecommender):
         super(SASRec, self).__init__(config, dataset)
 
         # load parameters info
-        self.n_layers = 2
-        self.n_heads = 2
+        self.n_layers = 4
+        self.n_heads = 4
         self.hidden_size = 64  # same as embedding_size
         self.inner_size = 258  # the dimensionality in feed-forward layer
         self.hidden_dropout_prob = 0.5
