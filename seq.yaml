@@ -36,8 +36,8 @@ min_item_inter_num: 5
 #    timestamp: 1577714400
 
 # training settings
-epochs: 30 #训练的最大轮数
-stopping_step: 40 #控制训练收敛的步骤数，在该步骤数内若选取的评测标准没有什么变化，就可以提前停止了
+epochs: 50 #训练的最大轮数
+stopping_step: 100 #控制训练收敛的步骤数，在该步骤数内若选取的评测标准没有什么变化，就可以提前停止了
 embedding_dim: 64
 hidden_size: 64
 train_batch_size: 256 #训练的batch_size
@@ -85,7 +85,7 @@ same_length : 10
 
 l_ok: True
 h_ok: True
-b_ok: False
+b_ok: True
 
 low_r: True
 high_r: True

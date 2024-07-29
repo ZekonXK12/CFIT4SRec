@@ -59,19 +59,19 @@ class WaveRec2(SequentialRecommender):
         self.dwt = DWTForward(J=3, wave='db4', mode='zero').cuda()  # Single level DWT
         self.idwt = DWTInverse(wave='db4', mode='zero').cuda()
 
-        # self.conv = nn.Conv2d(in_channels=3, out_channels=1, kernel_size=1)
+        self.conv = nn.Conv2d(in_channels=3, out_channels=1, kernel_size=1)
 
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=32, out_channels=1, kernel_size=1),
-        )
+        # self.conv = nn.Sequential(
+        #     nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, padding=1),
+        #     nn.BatchNorm2d(16),
+        #     nn.ReLU(),
+        #     nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1),
+        #     nn.BatchNorm2d(32),
+        #     nn.ReLU(),
+        #     nn.Conv2d(in_channels=32, out_channels=1, kernel_size=1),
+        # )
 
-        self.upsampler=Upsampler()
+        self.upsampler = UpSampler()
 
         # parameters initialization
         self.apply(self._init_weights)
@@ -112,27 +112,19 @@ class WaveRec2(SequentialRecommender):
         input_emb = self.dropout(input_emb)
 
         low_freq_component, high_freq_component = self.wavelet_transform(input_emb)
-        #
-        up_l_emb=self.upsampler(low_freq_component)
-        up_h_emb=self.upsampler(high_freq_component)
 
-        stacked = torch.stack([input_emb, up_l_emb, up_h_emb], dim=2)
-        reshaped = stacked.view(-1, 50, 3, 8, 8)
+        up_l_emb = self.upsampler(low_freq_component)
+        up_h_emb = self.upsampler(high_freq_component)
 
-        # 调整输入形状以适应卷积层
-        reshaped = reshaped.permute(0, 1, 3, 4, 2).contiguous()  # Shape: (256, 50, 8, 8, 3)
-        reshaped = reshaped.view(-1, 3, 8, 8)  # Shape: (256 * 50, 3, 8, 8)
+        stacked = torch.stack([input_emb, up_l_emb, up_h_emb],
+                              dim=-1)  # Shape: (batch_size, seq_length, hidden_size, 3)
+        reshaped = stacked.permute(0, 3, 1, 2).contiguous()  # Shape: (batch_size, 3, seq_length, hidden_size)
 
-        # 通过卷积层进行特征融合
-        fused = self.conv(reshaped)  # Shape: (256 * 50, 1, 8, 8)
-
-        # 恢复形状
-        fused = fused.view(-1, 50, 8, 8, 1).permute(0, 1, 4, 2, 3).squeeze(2)  # Shape: (256, 50, 8, 8)
-        fused = fused.view(-1,50,64)
-
+        # Feature fusion using conv layer
+        fused = self.conv(reshaped)
+        fused = fused.squeeze(1)
 
         fused = self.LayerNorm(fused)
-
         output = self.trm_encoder(fused, extended_attention_mask, output_all_encoded_layers=False)[0]
 
         return output
@@ -192,9 +184,9 @@ class WaveRec2(SequentialRecommender):
         return scores
 
 
-class Upsampler(nn.Module):
+class UpSampler(nn.Module):
     def __init__(self):
-        super(Upsampler, self).__init__()
+        super(UpSampler, self).__init__()
         self.encoder = nn.Sequential(
             nn.Conv1d(in_channels=64, out_channels=16, kernel_size=3, padding=1),
             nn.ReLU(),
@@ -220,4 +212,3 @@ class Upsampler(nn.Module):
         x = self.decoder(x)
         x = x.transpose(1, 2)  # 转置回 [batch_size, seq_length, embedding_dim]
         return x
-

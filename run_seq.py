@@ -8,12 +8,12 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     # parser.add_argument('--model', '-m', type=str, default='GRU4Rec', help='name of models')
-    parser.add_argument('--model', '-m', type=str, default='Caser', help='name of models')
-    # parser.add_argument('--model', '-m', type=str, default='WaveRec', help='name of models')
+    # parser.add_argument('--model', '-m', type=str, default='Caser', help='name of models')
+    parser.add_argument('--model', '-m', type=str, default='WaveRec2', help='name of models')
     # parser.add_argument('--model', '-m', type=str, default='SASRec', help='name of models')
     # parser.add_argument('--model', '-m', type=str, default='CFIT4SRec', help='name of models')
     parser.add_argument('--dataset', '-d', type=str, default='ml-1m', help='name of datasets')
-    # parser.add_argument('--dataset', '-d', type=str, default='ml-1m', help='name of datasets')
+    # parser.add_argument('--dataset', '-d', type=str, default='ml-100k', help='name of datasets')
     parser.add_argument('--config_files', type=str, default='seq.yaml', help='config files')
 
     args, _ = parser.parse_known_args()
