@@ -59,19 +59,13 @@ class WaveRec(SequentialRecommender):
         self.dwt = DWTForward(J=3, wave='db4', mode='zero').cuda()  # Single level DWT
         self.idwt = DWTInverse(wave='db4', mode='zero').cuda()
 
-        # self.conv = nn.Conv2d(in_channels=3, out_channels=1, kernel_size=1)
+        self.dwt2 = DWTForward(J=5, wave='db4', mode='zero').cuda()
+        self.idwt2 = DWTInverse(wave='db4', mode='zero').cuda()
 
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=32, out_channels=1, kernel_size=1),
-        )
+        self.conv = nn.Conv2d(in_channels=3, out_channels=1, kernel_size=1)
 
-        self.activation = nn.LeakyReLU(negative_slope=0.2)
+        self.upsampler = UpSampler()
+
         # parameters initialization
         self.apply(self._init_weights)
 
@@ -112,31 +106,45 @@ class WaveRec(SequentialRecommender):
 
         low_freq_component, high_freq_component = self.wavelet_transform(input_emb)
 
-        stacked = torch.stack([input_emb, low_freq_component, high_freq_component], dim=2)
-        reshaped = stacked.view(-1, 50, 3, 8, 8)
+        up_l_emb = self.upsampler(low_freq_component)
+        up_h_emb = self.upsampler(high_freq_component)
 
-        # 调整输入形状以适应卷积层
-        reshaped = reshaped.permute(0, 1, 3, 4, 2).contiguous()  # Shape: (256, 50, 8, 8, 3)
-        reshaped = reshaped.view(-1, 3, 8, 8)  # Shape: (256 * 50, 3, 8, 8)
+        stacked = torch.stack([input_emb, up_l_emb, up_h_emb],
+                              dim=-1)  # Shape: (batch_size, seq_length, hidden_size, 3)
+        reshaped = stacked.permute(0, 3, 1, 2).contiguous()  # Shape: (batch_size, 3, seq_length, hidden_size)
 
-        # 通过卷积层进行特征融合
-        fused = self.conv(reshaped)  # Shape: (256 * 50, 1, 8, 8)
-
-        # 恢复形状
-        fused = fused.view(-1, 50, 8, 8, 1).permute(0, 1, 4, 2, 3).squeeze(2)  # Shape: (256, 50, 8, 8)
-        fused = fused.view(-1,50,64)
+        # Feature fusion using conv layer
+        fused = self.conv(reshaped)
+        fused = fused.squeeze(1)
 
         fused = self.LayerNorm(fused)
-        # fused = self.dropout(fused)
-
         output = self.trm_encoder(fused, extended_attention_mask, output_all_encoded_layers=False)[0]
 
-        return output
+        # low_freq_component2, high_freq_component2 = self.wavelet_transform2(input_emb)
+        #
+        # up_l_emb2 = self.upsampler(low_freq_component2)
+        # up_h_emb2 = self.upsampler(high_freq_component2)
+        #
+        # stacked2 = torch.stack([input_emb, up_l_emb2, up_h_emb2],
+        #                       dim=-1)  # Shape: (batch_size, seq_length, hidden_size, 3)
+        # reshaped2 = stacked2.permute(0, 3, 1, 2).contiguous()  # Shape: (batch_size, 3, seq_length, hidden_size)
+        #
+        # # Feature fusion using conv layer
+        # fused2 = self.conv(reshaped2)
+        # fused2 = fused2.squeeze(1)
+        #
+        # fused2 = self.LayerNorm(fused2)
+        #
+        #
+        # output2 = self.trm_encoder(fused2, extended_attention_mask, output_all_encoded_layers=False)[0]
+
+
+        return output,input_emb,fused
 
     def calculate_loss(self, interaction):
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
-        seq_output = self.forward(item_seq, item_seq_len)
+        seq_output,input_emb,fused = self.forward(item_seq, item_seq_len)
         seq_output = self.gather_indexes(seq_output, item_seq_len - 1)
 
         pos_items = interaction[self.POS_ITEM_ID]
@@ -145,7 +153,9 @@ class WaveRec(SequentialRecommender):
         logits = torch.matmul(seq_output, test_item_emb.transpose(0, 1))  # 计算相似度 查询表示和键表示进行矩阵乘法
         loss = self.loss_fct(logits, pos_items)
 
-        return loss
+        nce_loss= self.ncelosss(1, 'cuda', input_emb, fused)
+
+        return loss+0.1*nce_loss
 
     def wavelet_transform(self, input_emb):
         # Ensure the input tensor has the correct shape (N, C, H, W)
@@ -168,11 +178,54 @@ class WaveRec(SequentialRecommender):
 
         return low_freq_component, high_freq_component
 
+    def wavelet_transform2(self, input_emb):
+        # Ensure the input tensor has the correct shape (N, C, H, W)
+        if input_emb.dim() != 4:
+            input_emb = input_emb.unsqueeze(1)  # Add channel dimension: (N, 1, H, W)
+
+        # Perform DWT
+        Yl, Yh = self.dwt2(input_emb)
+
+        # Only perform inverse DWT on Yl
+        Yh_zeros = [torch.zeros_like(Yh_level) for Yh_level in Yh]  # Create zeroed high-frequency components
+        low_freq_component = self.idwt2((Yl, Yh_zeros))
+
+        # Calculate high frequency component as residual
+        high_freq_component = input_emb - low_freq_component
+
+        # Ensure the output has the same shape as input_emb
+        low_freq_component = low_freq_component.squeeze(1)  # Remove channel dimension if needed
+        high_freq_component = high_freq_component.squeeze(1)  # Remove channel dimension if needed
+
+        return low_freq_component, high_freq_component
+
+    def ncelosss(self, temperature, device, batch_sample_one, batch_sample_two):
+        self.device = device
+        self.criterion = nn.CrossEntropyLoss().to(self.device)
+        self.temperature = temperature
+        b_size = batch_sample_one.shape[0]
+        batch_sample_one = batch_sample_one.view(b_size, -1)
+        batch_sample_two = batch_sample_two.view(b_size, -1)
+
+        self.cossim = nn.CosineSimilarity(dim=-1).to(self.device)
+        sim11 = torch.matmul(batch_sample_one, batch_sample_one.T) / self.temperature
+        sim22 = torch.matmul(batch_sample_two, batch_sample_two.T) / self.temperature
+        sim12 = torch.matmul(batch_sample_one, batch_sample_two.T) / self.temperature
+        d = sim12.shape[-1]
+        sim11[..., range(d), range(d)] = float('-inf')
+        sim22[..., range(d), range(d)] = float('-inf')
+        raw_scores1 = torch.cat([sim12, sim11], dim=-1)
+        raw_scores2 = torch.cat([sim22, sim12.transpose(-1, -2)], dim=-1)
+        logits = torch.cat([raw_scores1, raw_scores2], dim=-2)
+        labels = torch.arange(2 * d, dtype=torch.long, device=logits.device)
+        nce_loss = self.criterion(logits, labels)
+        return nce_loss
+
     def predict(self, interaction):
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
         test_item = interaction[self.ITEM_ID]
-        seq_output = self.forward(item_seq, item_seq_len)
+        seq_output,_,_ = self.forward(item_seq, item_seq_len)
         seq_output = self.gather_indexes(seq_output, item_seq_len - 1)
         test_item_emb = self.item_embedding(test_item)
         scores = torch.mul(seq_output, test_item_emb).sum(dim=1)  # [B]
@@ -181,8 +234,110 @@ class WaveRec(SequentialRecommender):
     def full_sort_predict(self, interaction):
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
-        seq_output = self.forward(item_seq, item_seq_len)
+        seq_output,_,_ = self.forward(item_seq, item_seq_len)
         seq_output = self.gather_indexes(seq_output, item_seq_len - 1)
         test_items_emb = self.item_embedding.weight[:self.n_items]  # unpad the augmentation mask
         scores = torch.matmul(seq_output, test_items_emb.transpose(0, 1))  # [B n_items]
         return scores
+
+
+class UpSampler(nn.Module):
+    def __init__(self):
+        super(UpSampler, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv1d(in_channels=64, out_channels=16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(in_channels=16, out_channels=32, kernel_size=3, padding=1),
+            nn.ReLU()
+        )
+        self.bilstm = nn.LSTM(input_size=32, hidden_size=32, num_layers=1, bidirectional=True, batch_first=True)
+        self.decoder = nn.Sequential(
+            nn.Conv1d(in_channels=64, out_channels=16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(in_channels=16, out_channels=64, kernel_size=3, padding=1),
+            nn.ReLU()
+        )
+
+    def forward(self, x):
+        # 输入形状: [batch_size, seq_length, embedding_dim]
+        # 需要转置为 [batch_size, embedding_dim, seq_length]
+        x = x.transpose(1, 2)
+        x = self.encoder(x)
+        x = x.transpose(1, 2)  # 转置为 [batch_size, seq_length, new_channels] 以适应 LSTM
+        x, _ = self.bilstm(x)
+        x = x.transpose(1, 2)  # 转置回 [batch_size, new_channels, seq_length] 以适应解码器
+        x = self.decoder(x)
+        x = x.transpose(1, 2)  # 转置回 [batch_size, seq_length, embedding_dim]
+        return x
+
+import torch
+import torch.nn as nn
+
+class xLSTMCell(nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super(xLSTMCell, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+
+        # LSTM 的标准门：输入门、遗忘门、输出门
+        self.input_gate = nn.Linear(input_size + hidden_size, hidden_size)
+        self.forget_gate = nn.Linear(input_size + hidden_size, hidden_size)
+        self.output_gate = nn.Linear(input_size + hidden_size, hidden_size)
+
+        # 扩展的门：重置门（假设为新的机制）
+        self.reset_gate = nn.Linear(input_size + hidden_size, hidden_size)
+
+        # 单元态更新
+        self.cell_gate = nn.Linear(input_size + hidden_size, hidden_size)
+
+    def forward(self, input, hx):
+        h_prev, c_prev = hx
+
+        # 拼接输入和隐藏状态
+        combined = torch.cat((input, h_prev), 1)
+
+        # 计算门值
+        i_t = torch.sigmoid(self.input_gate(combined))
+        f_t = torch.sigmoid(self.forget_gate(combined))
+        o_t = torch.sigmoid(self.output_gate(combined))
+        r_t = torch.sigmoid(self.reset_gate(combined))  # 新的重置门
+
+        # 计算候选单元态
+        c_tilde = torch.tanh(self.cell_gate(combined))
+
+        # 更新单元态和隐藏态
+        c_t = f_t * c_prev + i_t * c_tilde
+        # 使用重置门选择性重置某些单元
+        c_t = r_t * c_t
+        h_t = o_t * torch.tanh(c_t)
+
+        return h_t, c_t
+
+class xLSTM(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers):
+        super(xLSTM, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+
+        # 使用多个 xLSTM 单元堆叠
+        self.cells = nn.ModuleList([xLSTMCell(input_size if i == 0 else hidden_size, hidden_size) for i in range(num_layers)])
+
+    def forward(self, input):
+        batch_size, seq_len, _ = input.size()
+        h_t, c_t = (torch.zeros(batch_size, self.hidden_size).to(input.device),
+                    torch.zeros(batch_size, self.hidden_size).to(input.device))
+
+        outputs = []
+
+        for t in range(seq_len):
+            x_t = input[:, t, :]
+            for layer in range(self.num_layers):
+                h_t, c_t = self.cells[layer](x_t, (h_t, c_t))
+                x_t = h_t  # 输出作为下一层的输入
+            outputs.append(h_t.unsqueeze(1))
+
+        # 拼接输出为整个序列
+        outputs = torch.cat(outputs, dim=1)
+        return outputs
+
+

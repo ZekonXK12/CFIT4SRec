@@ -5,6 +5,7 @@ from pytorch_wavelets import DWTForward, DWTInverse
 from recbole.model.abstract_recommender import SequentialRecommender
 from recbole.model.layers import TransformerEncoder
 
+from mamba_ssm import Mamba
 
 class WaveRec2(SequentialRecommender):
 
@@ -13,6 +14,7 @@ class WaveRec2(SequentialRecommender):
 
         # load parameters info
         self.n_layers = 4
+        self.num_layers= 2
         self.n_heads = 4
         self.hidden_size = 64  # same as embedding_size
         self.inner_size = 258  # the dimensionality in feed-forward layer
@@ -73,6 +75,17 @@ class WaveRec2(SequentialRecommender):
 
         self.upsampler = UpSampler()
 
+        self.mamba_layers = nn.ModuleList([
+            MambaLayer(
+                d_model=64,
+                d_state=64,
+                d_conv=4,
+                expand=2,
+                dropout=0.3,
+                num_layers=2,
+            ) for _ in range(self.num_layers)
+        ])
+
         # parameters initialization
         self.apply(self._init_weights)
 
@@ -124,16 +137,31 @@ class WaveRec2(SequentialRecommender):
         fused = self.conv(reshaped)
         fused = fused.squeeze(1)
 
-        fused = self.LayerNorm(fused)
-        output = self.trm_encoder(fused, extended_attention_mask, output_all_encoded_layers=False)[0]
+        fused2=fused
 
-        return output
+
+        for i in range(self.num_layers):
+            fused = self.mamba_layers[i](fused)
+
+        fused = self.LayerNorm(fused)
+
+        for i in range(self.num_layers):
+            fused2 = self.mamba_layers[i](fused2)
+
+        fused = self.LayerNorm(fused)
+
+
+        output = self.trm_encoder(fused, extended_attention_mask, output_all_encoded_layers=False)[0]
+        output2 = self.trm_encoder(fused2, extended_attention_mask, output_all_encoded_layers=False)[0]
+
+        return output,output2
 
     def calculate_loss(self, interaction):
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
-        seq_output = self.forward(item_seq, item_seq_len)
+        seq_output,output2= self.forward(item_seq, item_seq_len)
         seq_output = self.gather_indexes(seq_output, item_seq_len - 1)
+        output2 = self.gather_indexes(output2, item_seq_len - 1)
 
         pos_items = interaction[self.POS_ITEM_ID]
 
@@ -141,7 +169,9 @@ class WaveRec2(SequentialRecommender):
         logits = torch.matmul(seq_output, test_item_emb.transpose(0, 1))  # 计算相似度 查询表示和键表示进行矩阵乘法
         loss = self.loss_fct(logits, pos_items)
 
-        return loss
+        nce_loss_l = self.ncelosss(self.tau, 'cuda', seq_output, output2)
+
+        return loss+0.1*nce_loss_l
 
     def wavelet_transform(self, input_emb):
         # Ensure the input tensor has the correct shape (N, C, H, W)
@@ -168,7 +198,7 @@ class WaveRec2(SequentialRecommender):
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
         test_item = interaction[self.ITEM_ID]
-        seq_output = self.forward(item_seq, item_seq_len)
+        seq_output,_= self.forward(item_seq, item_seq_len)
         seq_output = self.gather_indexes(seq_output, item_seq_len - 1)
         test_item_emb = self.item_embedding(test_item)
         scores = torch.mul(seq_output, test_item_emb).sum(dim=1)  # [B]
@@ -177,12 +207,33 @@ class WaveRec2(SequentialRecommender):
     def full_sort_predict(self, interaction):
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
-        seq_output = self.forward(item_seq, item_seq_len)
+        seq_output,_= self.forward(item_seq, item_seq_len)
         seq_output = self.gather_indexes(seq_output, item_seq_len - 1)
         test_items_emb = self.item_embedding.weight[:self.n_items]  # unpad the augmentation mask
         scores = torch.matmul(seq_output, test_items_emb.transpose(0, 1))  # [B n_items]
         return scores
 
+    def ncelosss(self, temperature, device, batch_sample_one, batch_sample_two):
+        self.device = device
+        self.criterion = nn.CrossEntropyLoss().to(self.device)
+        self.temperature = temperature
+        b_size = batch_sample_one.shape[0]
+        batch_sample_one = batch_sample_one.view(b_size, -1)
+        batch_sample_two = batch_sample_two.view(b_size, -1)
+
+        self.cossim = nn.CosineSimilarity(dim=-1).to(self.device)
+        sim11 = torch.matmul(batch_sample_one, batch_sample_one.T) / self.temperature
+        sim22 = torch.matmul(batch_sample_two, batch_sample_two.T) / self.temperature
+        sim12 = torch.matmul(batch_sample_one, batch_sample_two.T) / self.temperature
+        d = sim12.shape[-1]
+        sim11[..., range(d), range(d)] = float('-inf')
+        sim22[..., range(d), range(d)] = float('-inf')
+        raw_scores1 = torch.cat([sim12, sim11], dim=-1)
+        raw_scores2 = torch.cat([sim22, sim12.transpose(-1, -2)], dim=-1)
+        logits = torch.cat([raw_scores1, raw_scores2], dim=-2)
+        labels = torch.arange(2 * d, dtype=torch.long, device=logits.device)
+        nce_loss = self.criterion(logits, labels)
+        return nce_loss
 
 class UpSampler(nn.Module):
     def __init__(self):
@@ -212,3 +263,49 @@ class UpSampler(nn.Module):
         x = self.decoder(x)
         x = x.transpose(1, 2)  # 转置回 [batch_size, seq_length, embedding_dim]
         return x
+
+
+class MambaLayer(nn.Module):
+    def __init__(self, d_model, d_state, d_conv, expand, dropout, num_layers):
+        super().__init__()
+        self.num_layers = num_layers
+        self.mamba = Mamba(
+            # This module uses roughly 3 * expand * d_model^2 parameters
+            d_model=d_model,
+            d_state=d_state,
+            d_conv=d_conv,
+            expand=expand,
+        )
+        self.dropout = nn.Dropout(dropout)
+        self.LayerNorm = nn.LayerNorm(d_model, eps=1e-12)
+        self.ffn = FeedForward(d_model=d_model, inner_size=d_model * 4, dropout=dropout)
+
+    def forward(self, input_tensor):
+        hidden_states = self.mamba(input_tensor)
+        if self.num_layers == 1:  # one Mamba layer without residual connection
+            hidden_states = self.LayerNorm(self.dropout(hidden_states))
+        else:  # stacked Mamba layers with residual connections
+            hidden_states = self.LayerNorm(self.dropout(hidden_states) + input_tensor)
+        hidden_states = self.ffn(hidden_states)
+        return hidden_states
+
+
+class FeedForward(nn.Module):
+    def __init__(self, d_model, inner_size, dropout=0.2):
+        super().__init__()
+        self.w_1 = nn.Linear(d_model, inner_size)
+        self.w_2 = nn.Linear(inner_size, d_model)
+        self.activation = nn.GELU()
+        self.dropout = nn.Dropout(dropout)
+        self.LayerNorm = nn.LayerNorm(d_model, eps=1e-12)
+
+    def forward(self, input_tensor):
+        hidden_states = self.w_1(input_tensor)
+        hidden_states = self.activation(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+
+        hidden_states = self.w_2(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+
+        return hidden_states

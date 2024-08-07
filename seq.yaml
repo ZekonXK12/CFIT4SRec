@@ -36,8 +36,8 @@ min_item_inter_num: 5
 #    timestamp: 1577714400
 
 # training settings
-epochs: 50 #训练的最大轮数
-stopping_step: 100 #控制训练收敛的步骤数，在该步骤数内若选取的评测标准没有什么变化，就可以提前停止了
+epochs: 30 #训练的最大轮数
+stopping_step: 1000 #控制训练收敛的步骤数，在该步骤数内若选取的评测标准没有什么变化，就可以提前停止了
 embedding_dim: 64
 hidden_size: 64
 train_batch_size: 256 #训练的batch_size
@@ -59,10 +59,10 @@ log_root: "./log/"
 data_path: "./datasets/"
 #checkpoint_dir:
 
-lmd: 0.3
+lmd: 0.1
 #lmd_sem: 0.1
 
-tau: 1
+tau: 2
 
 # choose from {un, su, us, us_x}
 contrast: 'us_x'
