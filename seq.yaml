@@ -62,7 +62,7 @@ data_path: "./datasets/"
 lmd: 0.1
 #lmd_sem: 0.1
 
-tau: 2
+tau: 1
 
 # choose from {un, su, us, us_x}
 contrast: 'us_x'

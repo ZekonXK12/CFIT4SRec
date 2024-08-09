@@ -139,22 +139,21 @@ class WaveRec2(SequentialRecommender):
 
         fused2=fused
 
-
+        #
         for i in range(self.num_layers):
             fused = self.mamba_layers[i](fused)
 
-        fused = self.LayerNorm(fused)
+            fused = self.LayerNorm(fused)
 
-        for i in range(self.num_layers):
             fused2 = self.mamba_layers[i](fused2)
 
-        fused = self.LayerNorm(fused)
+            fused = self.LayerNorm(fused)
 
 
-        output = self.trm_encoder(fused, extended_attention_mask, output_all_encoded_layers=False)[0]
-        output2 = self.trm_encoder(fused2, extended_attention_mask, output_all_encoded_layers=False)[0]
+        fused = self.trm_encoder(fused, extended_attention_mask, output_all_encoded_layers=False)[0]
+        fused2 = self.trm_encoder(fused2, extended_attention_mask, output_all_encoded_layers=False)[0]
 
-        return output,output2
+        return fused,fused2
 
     def calculate_loss(self, interaction):
         item_seq = interaction[self.ITEM_SEQ]
