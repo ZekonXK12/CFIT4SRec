@@ -113,12 +113,16 @@ class WaveRec2(SequentialRecommender):
         input_emb = self.LayerNorm(input_emb)
         input_emb = self.dropout(input_emb)
 
-        low_freq_component, high_freq_component = self.wavelet_transform(input_emb)
+        # low_freq_component, high_freq_component = self.wavelet_transform(input_emb)
+        #
+        # up_l_emb = self.upsampler(low_freq_component)
+        # up_h_emb = self.upsampler(high_freq_component)
 
-        up_l_emb = self.upsampler(low_freq_component)
-        up_h_emb = self.upsampler(high_freq_component)
+        # stacked = torch.stack([input_emb, up_l_emb, up_h_emb], dim=-1)
 
-        stacked = torch.stack([input_emb, up_l_emb, up_h_emb], dim=-1)
+        stacked = torch.stack([input_emb, input_emb, input_emb], dim=-1)
+
+
         reshaped = stacked.permute(0, 3, 1, 2).contiguous()
 
         # Feature fusion using conv layer
